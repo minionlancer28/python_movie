@@ -9,6 +9,7 @@ import os
 import pandas as pd
 import pyqtgraph as pg
 from PyQt5 import QtCore,QtWidgets,QtGui
+from PyQt5.QtWidgets import QMessageBox
 import vlc
 import time as time_py
 import csv
@@ -23,7 +24,9 @@ locationLbl = ['gFx', 'gFy', 'gFz', 'wx', 'wy', 'wz', 'Bx', 'By', 'Bz']
 
 
 time = gFx = gFy = gFz = wx = wy = wz = bx = by = bz = list()
-org_time = org_gFx = org_gFy = org_gFz = org_wx = org_wy = org_wz = org_bx = org_by = org_bz = org_label = list()
+org_time = org_gFx = org_gFy = org_gFz = org_wx = org_wy = org_wz = org_bx = org_by = org_bz = org_labels = list()
+
+recTableLabels = list()
 
 forward_csv_sec = 0
 forward_ms = 0
@@ -33,11 +36,12 @@ play_total_ms = 0
 highLightLabelRange = list()
 graphLayoutList = list()
 tableWidget = None
+labelList = list()
 
 class GraphLayout():
     def __init__(self):
-        global locationLbl, highLightLabelRange, forward_csv_sec
-        
+        global locationLbl, highLightLabelRange, forward_csv_sec, labelList
+
         self.line = pg.InfiniteLine( pos=forward_csv_sec, angle=90, pen='r', movable=False )
         self.graphVBoxLayout = QtWidgets.QVBoxLayout()
         self.chkHBoxLayout = QtWidgets.QHBoxLayout()
@@ -47,8 +51,10 @@ class GraphLayout():
         self.checkedList = list()
         self.region = list()
         self.graphWidget = pg.PlotWidget(pen = "r")
+
+        self.highlightWidgets = list()
+
         self.graphWidget.setMinimumHeight(300)
-        
 
         for i, v in enumerate(locationLbl):
             qCheckBox = QtWidgets.QCheckBox(v)
@@ -56,18 +62,28 @@ class GraphLayout():
             self.chkHBoxLayout.addWidget(self.list_checkWidget[i])
             qCheckBox.stateChanged.connect(self.checkboxChanged)
         self.list_checkWidget[0].setChecked(True)
-        
-        self.textboxLabel = QtWidgets.QTextEdit("")
-        self.textboxLabel.setMaximumWidth(150)
-        self.textboxLabel.setMaximumHeight(25)
+
+        self.comboBoxLabel = QtWidgets.QComboBox()
+        self.comboBoxLabel.setMaximumWidth(150)
+        self.comboBoxLabel.setMaximumHeight(25)
+        self.comboBoxLabel.setFont(QtGui.QFont("", 12))
+        self.comboBoxLabel.addItems(labelList)
 
 
         self.buttonLabel = QtWidgets.QPushButton("ラベル追加")
         self.buttonLabel.setMaximumWidth(100)
-        self.buttonLabel.clicked.connect(self.inputLabelToCsv)
+        self.buttonLabel.setFont(QtGui.QFont("", 12))
+        self.buttonLabel.clicked.connect(self.inputLabelToTable)
 
-        self.labelInputLayout.addWidget(self.textboxLabel)
+        self.buttonRemoveLabel = QtWidgets.QPushButton("ラベル削除")
+        self.buttonRemoveLabel.setMaximumWidth(100)
+        self.buttonRemoveLabel.setFont(QtGui.QFont("", 12))
+        self.buttonRemoveLabel.clicked.connect(self.removeLabel)
+
+
+        self.labelInputLayout.addWidget(self.comboBoxLabel)
         self.labelInputLayout.addWidget(self.buttonLabel)
+        self.labelInputLayout.addWidget(self.buttonRemoveLabel)
         self.labelInputLayout.addWidget(QtWidgets.QLabel(""))
 
         self.labelSelRange = QtWidgets.QLabel("")
@@ -77,66 +93,99 @@ class GraphLayout():
         self.graphVBoxLayout.addWidget(self.graphWidget)
         self.graphVBoxLayout.addLayout(self.labelInputLayout)
         self.graphVBoxLayout.addLayout(self.chkHBoxLayout)
-        
-        self.drawGraph()
 
-    def inputLabelToCsv(self):
-        global org_time, org_label, highLightLabelRange, graphLayoutList
-        global tableWidget
+        # emit checkbox changed event automatically
+        # don't need to call drawGraph here
+        # self.drawGraph()
+
+    def addHighlightRegion(self, begin_time, end_time):
+        lr = pg.LinearRegionItem(values=(begin_time, end_time), brush=pg.mkBrush(150,150,150,100), movable=False )
+        self.highlightWidgets.append(lr)
+        self.graphWidget.addItem(lr)
+
+    def removeHighlightRegion(self, index):
+        lr = self.highlightWidgets[index]
+        self.graphWidget.removeItem(lr)
+        self.highlightWidgets.pop(index)
+
+
+    def removeLabel(self):
+        global tableWidget, recTableLabels
+        if len(tableWidget.selectedIndexes()) == 0 :
+            return
+
+        selectedRow = tableWidget.currentRow()
+        recTableLabels.pop(selectedRow)
+        highLightLabelRange.pop(selectedRow)
+        tableWidget.removeRow(selectedRow)
+        for i,v in enumerate(graphLayoutList):
+            v.removeHighlightRegion(selectedRow)
+
+    #click buttonLabel
+    def inputLabelToTable(self):
+        global org_time, org_labels, highLightLabelRange, graphLayoutList
+        global tableWidget, labelList, recTableLabels
 
         if len(self.region) != 2:
             return
-        inputLabel = self.textboxLabel.toPlainText().strip()
-
-        if inputLabel == "":
-            return
+        selLabelIndex = self.comboBoxLabel.currentIndex()
+        selLabelText = self.comboBoxLabel.currentText()
 
         begin_time = self.region[0]
         end_time = self.region[1]
-        
+
+        start_index = -1
+        end_index = -1
         for i in range(len(org_time)):
-            if org_time[i] >= begin_time and org_time[i] <= end_time :
-                org_label[i] = inputLabel
-        
-        highLightLabelRange.append([inputLabel, begin_time, end_time])        
-        
+            if org_time[i] >= begin_time and org_time[i] <= end_time and start_index < 0:
+                start_index = i
+                continue
+            if org_time[i] >= begin_time and org_time[i] <= end_time and start_index >= 0 :
+                # for labelIdx in range(len(labelList)):
+                #     org_labels[labelIdx][i] = 0
+                # org_labels[selLabelIndex][i] = 1
+                end_index = i
+
+        recTableLabels.append( (selLabelIndex, start_index, end_index) )
+
+        highLightLabelRange.append((selLabelText, begin_time, end_time))
+
         for i,v in enumerate(graphLayoutList):
-            lr = pg.LinearRegionItem(values=(begin_time, end_time), brush=pg.mkBrush(150,150,150,100), movable=False )
-            v.graphWidget.addItem(lr)
+            v.addHighlightRegion(begin_time, end_time)
 
         rowPosition = tableWidget.rowCount()
         tableWidget.insertRow(rowPosition)
-        tableWidget.setItem(rowPosition , 0, QtWidgets.QTableWidgetItem(inputLabel))
+        tableWidget.setItem(rowPosition , 0, QtWidgets.QTableWidgetItem(selLabelText))
         tableWidget.setItem(rowPosition , 1, QtWidgets.QTableWidgetItem(str('{:.3f}'.format(begin_time))))
         tableWidget.setItem(rowPosition , 2, QtWidgets.QTableWidgetItem(str('{:.3f}'.format(end_time))))
 
-    def drawGraph(self):        
+    def drawGraph(self):
         self.checkedList.clear()
         for i, v in enumerate(self.list_checkWidget):
             if v.checkState():
                 self.checkedList.append(i)
         if csv_ready:
             self.gen_graph()
-    
+
     def drawHighlight(self):
+        global highLightLabelRange
         for i,v in enumerate(highLightLabelRange):
-            lr = pg.LinearRegionItem(values=(v[1], v[2]), brush=pg.mkBrush(150,150,150,100), movable=False )
-            self.graphWidget.addItem(lr)
+            self.addHighlightRegion(v[1], v[2])
 
 
     def getLayout(self):
         return self.graphVBoxLayout
-    
+
     def checkboxChanged(self):
         self.drawGraph()
-    
+
     def deleteWidget(self):
         global locationLbl
 
         self.list_checkbox = list()
         self.graphWidget.setParent(None)
-        self.graphWidget.clear()         
-        
+        self.graphWidget.clear()
+
         self.line.setParent(None)
         self.line.deleteLater()
 
@@ -144,34 +193,34 @@ class GraphLayout():
             item = self.chkHBoxLayout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.deleteLater()            
+                widget.deleteLater()
         self.chkHBoxLayout.setParent(None)
 
         while self.labelInputLayout.count():
             item = self.labelInputLayout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.deleteLater()        
+                widget.deleteLater()
         self.labelInputLayout.setParent(None)
 
-       
-    
+
+
     def gen_graph(self):
         global csv_file_name, csv_file_extension, colorList, locationLbl
-        
+
         self.graphWidget.clear()
         legend = self.graphWidget.addLegend()
         self.locationList = [gFx, gFy, gFz, wx, wy, wz, bx, by, bz]
-        
+
         legend.setBrush(pg.mkBrush(0,200,0,50))
         legend.setPen(pg.mkPen(255,0,0,100))
         # self.graphWidget.setXRange(0,1)
         self.graphWidget.showGrid(x=True,y=True)
         for i, v in enumerate(self.checkedList):
             self.graphWidget.plot( pen=colorList[v], name=locationLbl[v])
-            self.graphWidget.plot(pen=colorList[v]).setData(time,self.locationList[v])        
-        
-        
+            self.graphWidget.plot(pen=colorList[v]).setData(time,self.locationList[v])
+
+
 
         self.lr = pg.LinearRegionItem([0, 10])
         self.graphWidget.addItem(self.lr)
@@ -180,48 +229,61 @@ class GraphLayout():
 
         self.drawHighlight()
         self.graphWidget.addItem(self.line)
-        
+
 
     def updateRegion(self):
         self.region = self.lr.getRegion()
         self.labelSelRange.setText("[ "+ str('{:.3f}'.format(self.region[0]))+", "+str('{:.3f}'.format(self.region[1]))+" ]")
-        
+
 
 
 class Application(QtWidgets.QMainWindow):
     def __init__(self, parent=None):
         QtWidgets.QMainWindow.__init__(self,parent)
         self.setWindowTitle("動画再生グラフ表示ツール")
+
+        self.loadLabelFromFile()
         #create a simple Instance
-        
+
         self.Vlc_Instance=vlc.Instance()
-        self.Media=None        
+        self.Media=None
         #creating empty vlc media Player
         self.MPlayer=self.Vlc_Instance.media_player_new()
-        
 
-        #Initalize the user interface 
+
+        #Initalize the user interface
         self.initUI()
-        #Pause var for check if song is in pause mode or not !        
+        #Pause var for check if song is in pause mode or not !
         # self.Is_Vframe_Hidden=False
-      
+
+    def loadLabelFromFile(self):
+        global labelList, org_labels, recTableLabels
+        org_labels = list()
+        labelList = list()
+        recTableLabels = list()
+        f = open("settings.csv", 'r', encoding="utf-8")
+        for line in f.readlines():
+            labelList.append(line.strip())
+            org_labels.append(list())
+
+
     def add_graph(self):
         global graphLayoutList
         graphLayout0 = GraphLayout()
-        graphLayoutList.append(graphLayout0)                
+        graphLayoutList.append(graphLayout0)
         self.graphsVboxLayout.addLayout(graphLayout0.getLayout())
 
     def remove_graph(self):
         global graphLayoutList
 
         if len(graphLayoutList) < 2:
-            return                
+            return
 
         lastGraphLayout = graphLayoutList.pop()
         lastGraphLayout.deleteWidget()
         self.graphsVboxLayout.removeItem(lastGraphLayout.getLayout())
-        
-       
+
+
 
     def initUI(self):
         global tableWidget
@@ -243,13 +305,15 @@ class Application(QtWidgets.QMainWindow):
         self.mainHBoxLayout = QtWidgets.QHBoxLayout()
         #third horizontal layout include play and stop button
         self.btnHBoxLayout = QtWidgets.QHBoxLayout()
-        
+
         #select btns
         self.selMp4Btn = QtWidgets.QPushButton("開く(動画)")
+        self.selMp4Btn.setFont(QtGui.QFont("", 12))
         self.selMp4Btn.clicked.connect(self.open_file)
         self.selMp4Btn.setMaximumWidth(100)
         self.mp4PathLbl = QtWidgets.QLabel("")
         self.selCsvBtn = QtWidgets.QPushButton("開く(CSV)")
+        self.selCsvBtn.setFont(QtGui.QFont("", 12))
         self.selCsvBtn.clicked.connect(self.open_csv_file)
         self.csvPathLbl = QtWidgets.QLabel("")
         self.selCsvBtn.setMaximumWidth(100)
@@ -259,8 +323,9 @@ class Application(QtWidgets.QMainWindow):
         self.hboxButtonLayout.addWidget(self.csvPathLbl)
 
         self.buttonSaveCsv = QtWidgets.QPushButton("CSV保存")
+        self.buttonSaveCsv.setFont(QtGui.QFont("", 12))
         self.buttonSaveCsv.clicked.connect(self.save_csv_file)
-        self.buttonSaveCsv.setMaximumWidth(100)        
+        self.buttonSaveCsv.setMaximumWidth(100)
         self.hboxButtonLayout.addWidget(self.buttonSaveCsv)
 
         #main layout elements
@@ -302,28 +367,33 @@ class Application(QtWidgets.QMainWindow):
 
         #timeZeroMathLayout
         self.timeZeroMathLayout = QtWidgets.QHBoxLayout()
-        
+
         self.textboxSetZero = QtWidgets.QTextEdit("0")
+        self.textboxSetZero.setFont(QtGui.QFont("", 12))
         self.textboxSetZero.setMaximumWidth(50)
-        self.textboxSetZero.setMaximumHeight(25)
+        self.textboxSetZero.setMaximumHeight(30)
 
         self.buttonSetZero = QtWidgets.QPushButton("オフセット")
+        self.buttonSetZero.setFont(QtGui.QFont("", 12))
         self.buttonSetZero.setMaximumWidth(100)
         self.buttonSetZero.clicked.connect(self.setZeroMatch)
 
         self.textboxSetZeroForVideo = QtWidgets.QTextEdit("0")
+        self.textboxSetZeroForVideo.setFont(QtGui.QFont("", 12))
         self.textboxSetZeroForVideo.setMaximumWidth(50)
-        self.textboxSetZeroForVideo.setMaximumHeight(25)
+        self.textboxSetZeroForVideo.setMaximumHeight(30)
 
         self.buttonSetZeroForVideo = QtWidgets.QPushButton("0秒合わせ(動画)")
-        self.buttonSetZeroForVideo.setMaximumWidth(100)
+        self.buttonSetZeroForVideo.setFont(QtGui.QFont("", 12))
+        self.buttonSetZeroForVideo.setMaximumWidth(120)
         self.buttonSetZeroForVideo.clicked.connect(self.setZeroMatchForVideo)
-        
+
 
         self.timeZeroMathLayout.addWidget(QtWidgets.QLabel(""))
 
         self.timeZeroMathLayout.addWidget(self.textboxSetZeroForVideo)
         labelSecondVideo = QtWidgets.QLabel("秒")
+        labelSecondVideo.setFont(QtGui.QFont("", 12))
         labelSecondVideo.setMaximumWidth(15)
         self.timeZeroMathLayout.addWidget(labelSecondVideo)
         self.timeZeroMathLayout.addWidget(self.buttonSetZeroForVideo)
@@ -332,7 +402,8 @@ class Application(QtWidgets.QMainWindow):
 
         self.timeZeroMathLayout.addWidget(self.textboxSetZero)
         labelSecond = QtWidgets.QLabel("秒")
-        labelSecond.setMaximumWidth(15)   
+        labelSecond.setFont(QtGui.QFont("", 12))
+        labelSecond.setMaximumWidth(15)
         self.timeZeroMathLayout.addWidget(labelSecond)
         self.timeZeroMathLayout.addWidget(self.buttonSetZero)
 
@@ -341,7 +412,7 @@ class Application(QtWidgets.QMainWindow):
         self.videoVBoxLayout.addSpacing(50)
         self.videoVBoxLayout.addWidget(self.MSlider,1)
         self.videoVBoxLayout.addLayout(self.TimeLblHLayout,2)
-        
+
         self.videoVBoxLayout.addLayout(self.timeZeroMathLayout,3)
         #graphlayout and its elements
 
@@ -354,20 +425,22 @@ class Application(QtWidgets.QMainWindow):
         # self.graphVBoxLayout = QtWidgets.QVBoxLayout()
         pg.setConfigOption('background', '#ffffff')
         # self.graphWidget = pg.PlotWidget(pen = "r")
-       
-        
+
+
         # Add Graph Button
         self.addGraphBtn = QtWidgets.QPushButton("グラフ追加")
+        self.addGraphBtn.setFont(QtGui.QFont("", 12))
         self.addGraphBtn.setMaximumWidth(100)
         self.addGraphBtn.clicked.connect(self.add_graph)
 
         # Remove Graph Button
         self.removeGraphBtn = QtWidgets.QPushButton("グラフ削除")
+        self.removeGraphBtn.setFont(QtGui.QFont("", 12))
         self.removeGraphBtn.setMaximumWidth(100)
         self.removeGraphBtn.clicked.connect(self.remove_graph)
 
         self.add_graph()
-        
+
         self.graphNumButtonLayout.addWidget(self.addGraphBtn)
         self.graphNumButtonLayout.addSpacing(30)
         self.graphNumButtonLayout.addWidget(self.removeGraphBtn)
@@ -375,10 +448,12 @@ class Application(QtWidgets.QMainWindow):
         self.graphNumButtonLayout.addWidget(QtWidgets.QLabel(""))
 
         tableWidget = QtWidgets.QTableWidget()
-        tableWidget.setMaximumHeight(200)        
+        tableWidget.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
+        tableWidget.setFont(QtGui.QFont("", 12))
+        tableWidget.setMaximumHeight(200)
         tableWidget.setColumnCount(3)
         tableWidget.setHorizontalHeaderLabels(['ラベル', '開始', '終了'])
-        
+
         widget = QtWidgets.QWidget(self)
         widget.setLayout(self.graphsVboxLayout)
 
@@ -394,20 +469,22 @@ class Application(QtWidgets.QMainWindow):
         #add layouts to mainHbox
 
         self.mainHBoxLayout.addLayout(self.videoVBoxLayout,1)
-        self.mainHBoxLayout.addLayout(self.rightVboxLayout,1)        
-        
+        self.mainHBoxLayout.addLayout(self.rightVboxLayout,1)
+
         # self.mainHBoxLayout.addLayout(self.graphVBoxLayout,1)
 
-        #btn layout 
+        #btn layout
 
         #Play Button
         self.buttonPlay=QtWidgets.QPushButton("再生")
+        self.buttonPlay.setFont(QtGui.QFont("", 12))
         self.btnHBoxLayout.addWidget(self.buttonPlay)
         self.buttonPlay.clicked.connect(self.play_pause)
-       
-        
+
+
         #stop Button
         self.buttonStop=QtWidgets.QPushButton("停止")
+        self.buttonStop.setFont(QtGui.QFont("", 12))
         self.btnHBoxLayout.addWidget(self.buttonStop)
         self.buttonStop.clicked.connect(self.Stop)
 
@@ -417,7 +494,7 @@ class Application(QtWidgets.QMainWindow):
         self.mainVBoxLayout.addLayout(self.hboxButtonLayout)
         self.mainVBoxLayout.addLayout(self.mainHBoxLayout)
         self.mainVBoxLayout.addLayout(self.btnHBoxLayout)
-        self.widget.setLayout(self.mainVBoxLayout)       
+        self.widget.setLayout(self.mainVBoxLayout)
 
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(50)
@@ -426,9 +503,9 @@ class Application(QtWidgets.QMainWindow):
         self.timer.timeout.connect(self.update_ui)
         self.VideoFrame.setStyleSheet ( "background-color: rgb(200, 100, 255)" )
         self.setGeometry(0,0,1780,800)
-        
 
-    #Play and pause method where media can pause and resume 
+
+    #Play and pause method where media can pause and resume
     def play_pause(self):
         global csv_ready, total_ms, play_total_ms
         """Toggle play/pause status
@@ -441,15 +518,15 @@ class Application(QtWidgets.QMainWindow):
             self.buttonPlay.setText("再生")
             self.is_paused = True
             self.timer.stop()
-        else:                                   
-            if csv_ready == True:                
+        else:
+            if csv_ready == True:
                 # self.gen_graph_html()
                 self.MPlayer.play()
                 if self.is_stopped == True:
                     time_py.sleep(1)
                     self.is_stopped = False
                     total_ms = self.MPlayer.get_length()
-                    
+
                     play_total_ms = total_ms - forward_ms
 
                     self.MSlider.setMaximum(play_total_ms)
@@ -458,11 +535,11 @@ class Application(QtWidgets.QMainWindow):
                 self.buttonPlay.setText("一時停止")
                 self.is_paused = False
                 self.timer.start()
-                
-                
+
+
             else:
                 self.open_csv_file()
-            
+
     #Stop Media Player
     def Stop(self):
         global forward_ms, total_ms
@@ -472,27 +549,71 @@ class Application(QtWidgets.QMainWindow):
         self.MPlayer.stop()
         self.buttonPlay.setText("再生")
         self.timer.stop()
-        self.is_stopped = True        
+        self.is_stopped = True
         self.MSlider.setValue(0)
-        
+
 
         # if self.Is_Vframe_Hidden:
         #     self.VideoFrame.show()
         #     self.Is_Vframe_Hidden=False
         #     self.resize(1024,768)
 
+    def initData(self):
+        global graphLayoutList, tableWidget, highLightLabelRange
+        #global org_time,org_gFx,org_gFy,org_gFz,org_wx,org_wy,org_wz,org_bx,org_by,org_bz,org_label
+
+        global csv_ready
+
+        tableWidget.setRowCount(0)
+
+        while(len(graphLayoutList)>1):
+            lastGraphLayout = graphLayoutList.pop()
+            lastGraphLayout.deleteWidget()
+            self.graphsVboxLayout.removeItem(lastGraphLayout.getLayout())
+
+        # highLightLabelRange.clear()
+
+        graphLayout = graphLayoutList[0]
+
+        graphLayout.graphWidget.clear()
+
+        highLightLabelRange.clear()
+
+        csv_ready = False
+
+        self.csvPathLbl.setText("")
+
+        self.loadLabelFromFile()
+
+        # graphLayout.line.setParent(None)
+        # graphLayout.line.deleteLater()
+        # graphLayout.graphWidget.clear()
+
+        # while self.chkHBoxLayout.count():
+        #     item = self.chkHBoxLayout.takeAt(0)
+        #     widget = item.widget()
+        #     if widget is not None:
+        #         widget.deleteLater()
+        # self.chkHBoxLayout.setParent(None)
+
+
+
+
     def open_csv_file(self):
-        global time,gFx,gFy,gFz,wx,wy,wz,bx,by,bz,csv_ready,csv_file_name,csv_file_extension, org_time, org_gFx, org_gFy, org_gFz, org_wx, org_wy, org_wz, org_bx, org_by, org_bz, org_label
-        global graphLayoutList, tableWidget
+        global time,gFx,gFy,gFz,wx,wy,wz,bx,by,bz,csv_ready,csv_file_name,csv_file_extension, org_time, org_gFx, org_gFy, org_gFz, org_wx, org_wy, org_wz, org_bx, org_by, org_bz, org_labels, labelList
+        global graphLayoutList, tableWidget, highLightLabelRange, recTableLabels
+
+        self.initData()
+
         sel_csv_text = "Choose CSV File"
         self.csvFilePath = QtWidgets.QFileDialog.getOpenFileName(self, sel_csv_text, os.path.expanduser('~'))
         if self.csvFilePath[0]!= "":
             csv_file_name,csv_file_extension=os.path.splitext(self.csvFilePath[0])
             # print(self.csv_file_extension)
-            if(csv_file_extension == ".csv" or csv_file_extension == ".CSV"):                
-                self.csvPathLbl.setText(csv_file_name+csv_file_extension)                
-                df = pd.read_csv(csv_file_name+csv_file_extension,dtype= {'label': str}, encoding = "ISO-8859-1")                
-                
+            if(csv_file_extension == ".csv" or csv_file_extension == ".CSV"):
+                self.csvPathLbl.setText(csv_file_name+csv_file_extension)
+                df = pd.read_csv(csv_file_name+csv_file_extension, encoding = "shift_jis")
+
                 org_time = list(df["time"])
                 org_gFx = list(df["gFx"])
                 org_gFy = list(df["gFy"])
@@ -503,43 +624,43 @@ class Application(QtWidgets.QMainWindow):
                 org_bx = list(df["Bx"])
                 org_by = list(df["By"])
                 org_bz = list(df["Bz"])
-                org_label = list()
-                
+
+                highLightLabelRange.clear()
+                recTableLabels.clear()
+
                 try:
-                    org_label = list(df["label"])
-                    highLightLabelRange.clear()
-                    
+                    for idx, label in enumerate(labelList):
+                        org_labels[idx] = list(df[label])
+
                     begin_time = 0
                     end_time = 0
-                    label = ""
+                    start_index = 0
+                    end_index = 0
 
-                    for i in range(len(org_label)):                        
-                        if pd.isna(org_label[i]):
-                            if label != "" :
-                                end_time = org_time[i-1]
-                                highLightLabelRange.append([label, begin_time, end_time])
-                                label = ""
-                            continue
-                        if  label != "" and label != org_label[i]:
-                            end_time = org_time[i-1]
-                            highLightLabelRange.append([label, begin_time, end_time])
-                            begin_time = org_time[i]
-                            label = org_label[i]
-                            continue
-                        if label =="" and label != org_label[i]:
-                            label = org_label[i]
-                            begin_time = org_time[i]
-                            continue
-                        if label == org_label[i]:
-                            continue
-                    if len(org_time) > 0:
-                        if label != "":
-                            highLightLabelRange.append([label, begin_time, org_time[len(org_time)-1]])                
+                    add_label = False
+                    for label_idx, label_name in enumerate(labelList):
+                        for i in range(len(org_time)):
+                            if int(org_labels[label_idx][i]) != 1 and  add_label == True :
+                                end_index = i-1
+                                end_time = org_time[end_index]
+                                highLightLabelRange.append([labelList[label_idx], begin_time, end_time])
+                                recTableLabels.append((label_idx, start_index, end_index))
+
+                                add_label = False
+                                continue
+                            if int(org_labels[label_idx][i]) == 1 and add_label == False:
+                                start_index = i
+                                begin_time = org_time[start_index]
+                                add_label = True
+                                continue
+                        if len(org_time) > 0 and add_label == True:
+                                highLightLabelRange.append([labelList[label_idx], begin_time, org_time[len(org_time)-1]])
+                                recTableLabels.append((label_idx, start_index, len(org_time)-1))
                 except:
-                    for i in range(len(org_time)):
-                        org_label.append("")
+                    # for idx, label in enumerate(labelList):
+                    #     for i in range(len(org_time)):
+                    #         org_labels[idx].append(0)
                     print("ERROR")
-                
 
                 time = org_time.copy()
                 gFx = org_gFx.copy()
@@ -553,10 +674,10 @@ class Application(QtWidgets.QMainWindow):
                 bz = org_bz.copy()
 
                 csv_ready = True
-                
+
                 for i, v in enumerate(graphLayoutList):
                     v.drawGraph()
-                
+
                 tableWidget.setRowCount(0)
                 for i, v in enumerate(highLightLabelRange):
                     rowPosition = tableWidget.rowCount()
@@ -568,15 +689,36 @@ class Application(QtWidgets.QMainWindow):
             else:
                 csv_ready = False
                 self.csvPathLbl.setText("incorrect extension")
+
+    # def getIdx(self, rowIdx):
+    #     global org_labels
+    #     try:
+    #         for i in range(len(org_labels)):
+    #             if int(org_labels[i][rowIdx]) == 1:
+    #                 return i
+    #     except:
+    #         return -1
+    #     return -1
+
+
+
     def save_csv_file(self):
-        if self.csvFilePath == None:            
+        global labelList
+        if self.csvFilePath == None:
             return
         csvSavePath = self.csvFilePath[0]
-        with open(csvSavePath,'w', encoding='UTF8', newline='') as f:
+        index = csvSavePath.find('.csv')
+        csvSavePath = csvSavePath[:index] + '_labeled' + csvSavePath[index:]
+        with open(csvSavePath,'w', encoding='shift_jis', newline='') as f:
             writer = csv.writer(f)
-            header = ['time','gFx', 'gFy', 'gFz', 'wx', 'wy', 'wz', 'Bx', 'By', 'Bz','label']
+            header = ['time','gFx', 'gFy', 'gFz', 'wx', 'wy', 'wz', 'Bx', 'By', 'Bz']
+            for label in labelList:
+                header.append(label)
+
             writer.writerow(header)
             for i in range(len(org_time)):
+                if org_time[i]-forward_csv_sec < 0:
+                    continue
                 gFx = org_gFx[i]
                 gFy = org_gFy[i]
                 gFz = org_gFz[i]
@@ -586,7 +728,7 @@ class Application(QtWidgets.QMainWindow):
                 bx = org_bx[i]
                 by = org_by[i]
                 bz = org_bz[i]
-                label = org_label[i]
+
                 if pd.isna(org_gFx[i]):
                     gFx = ""
                 if pd.isna(org_gFy[i]):
@@ -594,7 +736,7 @@ class Application(QtWidgets.QMainWindow):
                 if pd.isna(org_gFz[i]):
                     gFz = ""
                 if pd.isna(org_wx[i]):
-                    wx = ""                    
+                    wx = ""
                 if pd.isna(org_wy[i]):
                     wy = ""
                 if pd.isna(org_wz[i]):
@@ -602,14 +744,35 @@ class Application(QtWidgets.QMainWindow):
                 if pd.isna(org_bx[i]):
                     bx = ""
                 if pd.isna(org_by[i]):
-                    by = ""                    
+                    by = ""
                 if pd.isna(org_bz[i]):
                     bz = ""
-                if pd.isna(org_label[i]):
-                    label = ""
-                data = [org_time[i], gFx, gFy, gFz, wx, wy, wz, bx, by, bz, label]
+                data = [org_time[i]-forward_csv_sec, gFx, gFy, gFz, wx, wy, wz, bx, by, bz]
+
+                self.recTableToCsv()
+
+                for idx in range(len(labelList)):
+                    if pd.isna(org_labels[idx][i]):
+                        data.append(0)
+                    else:
+                        data.append(org_labels[idx][i])
                 writer.writerow(data)
+        QMessageBox.information(None, "", "CSV保存完了しました", QMessageBox.Yes)
+
+    def recTableToCsv(self):
+        global labelList, org_time, org_labels, recTableLabels
+        for idx, label in enumerate(labelList):
+            org_labels[idx] = list()
+            for i in range(len(org_time)):
+                org_labels[idx].append(0)
         
+        for idx, label_data in enumerate(recTableLabels):
+            for i in range(label_data[1], label_data[2]+1):
+                org_labels[label_data[0]][i] = 1
+
+
+
+
     def open_file(self):
         """
             Open a media file in a MPlayer
@@ -617,15 +780,15 @@ class Application(QtWidgets.QMainWindow):
 
         dialog_txt = "Choose Media File"
         filename = QtWidgets.QFileDialog.getOpenFileName(self, dialog_txt, os.path.expanduser('~'))
-        #check if anything got if not empty just pass else return 
+        #check if anything got if not empty just pass else return
         if filename[0]!= "":
             #before returning if it's an audio file resize the media player
             self.filename,self.file_extension=os.path.splitext(filename[0])
-            self.mp4PathLbl.setText(self.filename+self.file_extension)            
+            self.mp4PathLbl.setText(self.filename+self.file_extension)
             self.is_stopped = True
-            self.VideoFrame.show()            
+            self.VideoFrame.show()
         else:
-            return 
+            return
 
 
         # getOpenFileName returns a tuple, so use only the actual file name
@@ -651,71 +814,71 @@ class Application(QtWidgets.QMainWindow):
         elif platform.system() == "Darwin": # for MacOS
             self.MPlayer.set_nsobject(int(self.VideoFrame.winId()))
 
-        
-    # Match zero for video 
+
+    # Match zero for video
     def setZeroMatchForVideo(self):
         global time, gFx, gFy, gFz, wx, wy, wz, bx, by, bz, org_time, org_gFx, org_gFy, org_gFz, org_wx, org_wy, org_wz, org_bx, org_by, org_bz
         global forward_ms, total_ms, play_total_ms
 
         if csv_ready == False:
             return
-        
+
         if self.MPlayer.is_playing():
             self.timer.stop()
 
         try:
-            sec = float(self.textboxSetZeroForVideo.toPlainText())            
+            sec = float(self.textboxSetZeroForVideo.toPlainText())
         except:
             print('The variable is not a number')
             self.textboxSetZero.setText("0")
             sec = 0.0
-        
+
         if sec < 0 :
             self.textboxSetZeroForVideo.setText("0")
             sec = 0.0
-            
+
         forward_ms = sec * 1000
 
         play_total_ms = total_ms - forward_ms
         self.MSlider.setMaximum(play_total_ms)
         self.MSlider.setValue(0)
         if self.is_stopped == False:
-            if total_ms >0 :        
-                self.MPlayer.set_position( forward_ms / total_ms )            
-            self.timer.start()        
+            if total_ms >0 :
+                self.MPlayer.set_position( forward_ms / total_ms )
+            self.timer.start()
 
     # Match zero for csv
-    def setZeroMatch(self):        
+    def setZeroMatch(self):
         global time, gFx, gFy, gFz, wx, wy, wz, bx, by, bz, org_time, org_gFx, org_gFy, org_gFz, org_wx, org_wy, org_wz, org_bx, org_by, org_bz
         global total_ms, play_total_ms, forward_csv_sec
         global graphLayoutList
         if csv_ready == False:
             return
-        
+
         if self.MPlayer.is_playing():
             self.timer.stop()
 
         try:
-            sec = float(self.textboxSetZero.toPlainText())            
+            sec = float(self.textboxSetZero.toPlainText())
         except:
             print('The variable is not a number')
             self.textboxSetZero.setText("0")
             sec = 0.0
-        
+
         if sec < 0 :
             self.textboxSetZero.setText("0")
-            sec = 0.0        
+            sec = 0.0
 
         forward_csv_sec = sec
 
-        for i,v in enumerate(graphLayoutList):            
+        for i,v in enumerate(graphLayoutList):
             v.line.setValue(forward_csv_sec)
-         
-         
-        
+
+
+
         if self.MPlayer.is_playing():
-            self.Stop()    
-       
+            self.Stop()
+
 
 
     def update_ui(self):
@@ -725,7 +888,7 @@ class Application(QtWidgets.QMainWindow):
         # Set the slider's position to its corresponding media position
         # Note that the setValue function only takes values of type int,
         # so we must first convert the corresponding media position.
-        
+
         cur_pos = self.MPlayer.get_position()
 
         self.MSlider.setValue(int(cur_pos*total_ms) - forward_ms)
@@ -739,7 +902,7 @@ class Application(QtWidgets.QMainWindow):
             # This fixes that "bug".
             if not self.is_paused:
                 self.Stop()
-    
+
 
     def set_position(self):
         global forward_ms, total_ms
@@ -753,40 +916,40 @@ class Application(QtWidgets.QMainWindow):
         # Set the media position to where the slider was dragged
         # print(self.MSlider.value())
         self.timer.stop()
-        
+
         pos = self.MSlider.value()
-        self.MPlayer.set_position( (pos + forward_ms) / total_ms )        
-        
-        self.timer.start()    
-       
+        self.MPlayer.set_position( (pos + forward_ms) / total_ms )
+
+        self.timer.start()
+
     def convertTime(self, ms):
         subsec = (int(ms/100)) %10
         second = (int(ms/1000)) % 60
         minute = (int(ms/1000/60)) % 60
         retTime = ""
-        
+
         if second < 10 :
             second = "0" + str(second)
-        
+
         if minute < 10 :
             minute = "0" + str(minute)
-        
+
         return str(minute) + ":" + str(second) + ":" + str(subsec)
-         
-    def timerEvent(self):        
+
+    def timerEvent(self):
         global forward_ms, total_ms, play_total_ms, forward_csv_sec
         global graphLayoutList
-        
+
         cur_ms = self.MPlayer.get_position() * total_ms
         #Current Position in ms
-        
+
         for i,v in enumerate(graphLayoutList):
             v.line.setValue( ( cur_ms- forward_ms )/1000 + forward_csv_sec)
 
         self.Time_duration.setText(self.convertTime(cur_ms - forward_ms))
-        self.Video_Length.setText(self.convertTime(play_total_ms))       
+        self.Video_Length.setText(self.convertTime(play_total_ms))
 
-    
+
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     player = Application()
